@@ -1,0 +1,32 @@
+{
+  "name": "zip64-js",
+  "version": "0.0.1",
+  "description": "A JavaScript library to zip and unzip files with zip64 support",
+  "keywords": [
+    "zip unzip delate inflate zip64"
+  ],
+  "author": "Gildas Lormeau <gildas.lormeau@gmail.com> (https://github.com/gildas-lormeau/)",
+  "licenses": [
+    {
+      "type": "BSD-3-Clause",
+      "url": "http://opensource.org/licenses/BSD-3-Clause"
+    }
+  ],
+  "homepage": "https://github.com/gildas-lormeau/zip.js",
+  "bugs": {
+    "url": "https://github.com/gildas-lormeau/zip.js/issues",
+    "email": "gildas.lormeau@gmail.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/gildas-lormeau/zip.js.git"
+  },
+  "dependencies": {},
+  "devDependencies": {},
+  "scripts": {
+    "env": "env",
+    "echo": "echo \"\""
+  },
+  "main": "WebContent/zip.js",
+  "license": "BSD-3-Clause"
+}

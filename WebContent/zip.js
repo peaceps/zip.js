@@ -39,7 +39,7 @@
 	var ERR_READ_DATA = "Error while reading file data.";
 	var ERR_DUPLICATED_NAME = "File already exists.";
 	var CHUNK_SIZE = 512 * 1024;
-	
+
 	var TEXT_PLAIN = "text/plain";
 
 	var appendABViewSupported;
@@ -73,7 +73,7 @@
 		}
 		return table;
 	})();
-	
+
 	// "no-op" codec
 	function NOOP() {}
 	NOOP.prototype.append = function append(bytes, onprogress) {
@@ -269,24 +269,19 @@
 	Data64URIWriter.prototype.constructor = Data64URIWriter;
 
 	function BlobWriter(contentType) {
-		var blob, that = this;
+		var data = [], that = this;
 
 		function init(callback) {
-			blob = new Blob([], {
-				type : contentType
-			});
 			callback();
 		}
 
 		function writeUint8Array(array, callback) {
-			blob = new Blob([ blob, appendABViewSupported ? array : array.buffer ], {
-				type : contentType
-			});
+			data.push(appendABViewSupported ? array : array.buffer);
 			callback();
 		}
 
 		function getData(callback) {
-			callback(blob);
+			callback(new Blob(data, {type: contentType}));
 		}
 
 		that.init = init;
@@ -296,7 +291,7 @@
 	BlobWriter.prototype = new Writer();
 	BlobWriter.prototype.constructor = BlobWriter;
 
-	/** 
+	/**
 	 * inflate/deflate core functions
 	 * @param worker {Worker} web worker for the task.
 	 * @param initialMessage {Object} initial message to be sent to the worker. should contain
@@ -368,7 +363,7 @@
 					var msg = index === 0 ? initialMessage : {sn : sn};
 					msg.type = 'append';
 					msg.data = array;
-					
+
 					// posting a message with transferables will fail on IE10
 					try {
 						worker.postMessage(msg, [array.buffer]);
@@ -546,13 +541,39 @@
 			entry.compressedSize = data.view.getUint32(index + 14, true);
 			entry.uncompressedSize = data.view.getUint32(index + 18, true);
 		}
-		if (entry.compressedSize === 0xFFFFFFFF || entry.uncompressedSize === 0xFFFFFFFF) {
-			onerror(ERR_ZIP64);
-			return;
-		}
 		entry.filenameLength = data.view.getUint16(index + 22, true);
 		entry.extraFieldLength = data.view.getUint16(index + 24, true);
 	}
+
+	function readZip64ExtraField(entry, dataview, offset) {
+	    let zip64ExtraFields = null;
+	    let extraFieldCursorIndex = 0;
+        while (extraFieldCursorIndex < entry.extraFieldLength) {
+            let extraFieldFlag = dataview.getUint16(offset + extraFieldCursorIndex, true);
+            extraFieldCursorIndex += 2;
+            let extraFieldLength = dataview.getUint16(offset + extraFieldCursorIndex, true);
+            extraFieldCursorIndex += 2;
+            if (extraFieldFlag !== 0x0001) {
+                extraFieldCursorIndex += extraFieldLength;
+                continue;
+            }
+            // Suppose there're not last 4 bytes for disk number here
+            zip64ExtraFields = [...Array(extraFieldLength / 8).keys()]
+                .map(i => Number(dataview.getBigUint64(offset + extraFieldCursorIndex + i * 8, true)))
+            break;
+        }
+        if (zip64ExtraFields) {
+            if (entry.uncompressedSize === 0xFFFFFFFF) {
+                entry.uncompressedSize = zip64ExtraFields.splice(0, 1)[0];
+            }
+            if (entry.compressedSize === 0xFFFFFFFF) {
+                entry.compressedSize = zip64ExtraFields.splice(0, 1)[0];
+            }
+            if (entry.offset === 0xFFFFFFFF) {
+                entry.offset = zip64ExtraFields[0];
+            }
+        }
+    }
 
 	function createZipReader(reader, callback, onerror) {
 		var inflateSN = 0;
@@ -593,13 +614,25 @@
 					return;
 				}
 				readCommonHeader(that, data, 4, false, onerror);
-				dataOffset = that.offset + 30 + that.filenameLength + that.extraFieldLength;
-				writer.init(function() {
-					if (that.compressionMethod === 0)
-						copy(that._worker, inflateSN++, reader, writer, dataOffset, that.compressedSize, checkCrc32, getWriterData, onprogress, onreaderror, onwriteerror);
-					else
-						inflate(that._worker, inflateSN++, reader, writer, dataOffset, that.compressedSize, checkCrc32, getWriterData, onprogress, onreaderror, onwriteerror);
-				}, onwriteerror);
+                // file size for zip64 locates in extra field 0x0001
+				if (that.uncompressedSize === 0xFFFFFFFF || that.compressedSize === 0xFFFFFFFF) {
+                    reader.readUint8Array(that.offset + 30 + that.filenameLength, that.extraFieldLength, function(zip64ExtraBytes) {
+                        var zip64ExtraData = getDataHelper(zip64ExtraBytes.length, zip64ExtraBytes);
+                        readZip64ExtraField(that, zip64ExtraData.view, 0);
+                        readDataContent();
+                    })
+                } else {
+                    readDataContent();
+                }
+				function readDataContent() {
+                    dataOffset = that.offset + 30 + that.filenameLength + that.extraFieldLength;
+                    writer.init(function() {
+                        if (that.compressionMethod === 0)
+                            copy(that._worker, inflateSN++, reader, writer, dataOffset, that.compressedSize, checkCrc32, getWriterData, onprogress, onreaderror, onwriteerror);
+                        else
+                            inflate(that._worker, inflateSN++, reader, writer, dataOffset, that.compressedSize, checkCrc32, getWriterData, onprogress, onreaderror, onwriteerror);
+                    }, onwriteerror);
+                }
 			}, onreaderror);
 		};
 
@@ -615,20 +648,44 @@
 			var ZIP_COMMENT_MAX = 256 * 256, EOCDR_MAX = EOCDR_MIN + ZIP_COMMENT_MAX;
 
 			// In most cases, the EOCDR is EOCDR_MIN bytes long
-			doSeek(EOCDR_MIN, function() {
+            var eocdrBytes = [0x50, 0x4b, 0x05, 0x06];
+			doSeek(EOCDR_MIN, eocdrBytes, function() {
 				// If not found, try within EOCDR_MAX bytes
-				doSeek(Math.min(EOCDR_MAX, reader.size), function() {
+				doSeek(Math.min(EOCDR_MAX, reader.size), eocdrBytes, function() {
 					onerror(ERR_BAD_FORMAT);
 				});
 			});
 
 			// seek last length bytes of file for EOCDR
-			function doSeek(length, eocdrNotFoundCallback) {
+			function doSeek(length, seekBytes, eocdrNotFoundCallback) {
 				reader.readUint8Array(reader.size - length, length, function(bytes) {
 					for (var i = bytes.length - EOCDR_MIN; i >= 0; i--) {
-						if (bytes[i] === 0x50 && bytes[i + 1] === 0x4b && bytes[i + 2] === 0x05 && bytes[i + 3] === 0x06) {
-							eocdrCallback(new DataView(bytes.buffer, i, EOCDR_MIN));
-							return;
+						if (bytes[i] === seekBytes[0] && bytes[i + 1] === seekBytes[1] && bytes[i + 2] === seekBytes[2]
+                            && bytes[i + 3] === seekBytes[3]) {
+						    var eocdrDataView = new DataView(bytes.buffer, i, length);
+						    // When offset is 0xFFFFFFFF it's a zip64 eocdr
+						    if (eocdrDataView.getUint32(16, true) === 0xFFFFFFFF) {
+						        // search for zip64 eocdr
+                                // 20 = zip64 eocdr ending structure length
+                                // 56 = zip64 eocdr structure length
+                                doSeek(length + 20 + 56, [0x50, 0x4b, 0x06, 0x06], eocdrNotFoundCallback);
+                                return;
+                            } else {
+						        var seekedEntryStartOffset = 0;
+						        var seekedEntriesCount = 0;
+						        if (eocdrDataView.getUint32(0, true) === 0x06054b50) {
+                                    seekedEntryStartOffset = eocdrDataView.getUint32(16, true);
+                                    seekedEntriesCount = eocdrDataView.getUint16(8, true);
+                                } else if (eocdrDataView.getUint32(0, true) === 0x06064b50) {
+                                    seekedEntryStartOffset = Number(eocdrDataView.getBigUint64(48, true));
+                                    seekedEntriesCount = eocdrDataView.getBigUint64(24, true);
+                                } else {
+                                    eocdrNotFoundCallback();
+                                    return;
+                                }
+                                eocdrCallback(seekedEntryStartOffset, seekedEntriesCount);
+                                return;
+                            }
 						}
 					}
 					eocdrNotFoundCallback();
@@ -642,10 +699,7 @@
 			getEntries : function(callback) {
 				var worker = this._worker;
 				// look for End of central directory record
-				seekEOCDR(function(dataView) {
-					var datalength, fileslength;
-					datalength = dataView.getUint32(16, true);
-					fileslength = dataView.getUint16(8, true);
+				seekEOCDR(function(datalength, fileslength) {
 					if (datalength < 0 || datalength >= reader.size) {
 						onerror(ERR_BAD_FORMAT);
 						return;
@@ -663,6 +717,10 @@
 							entry.commentLength = data.view.getUint16(index + 32, true);
 							entry.directory = ((data.view.getUint8(index + 38) & 0x10) == 0x10);
 							entry.offset = data.view.getUint32(index + 42, true);
+                            // file size for zip64 locates in extra field 0x0001
+							if (entry.uncompressedSize === 0xFFFFFFFF || entry.compressedSize === 0xFFFFFFFF || entry.offset === 0xFFFFFFFF) {
+                                readZip64ExtraField(entry, data.view, index + 46 + entry.filenameLength);
+                            }
 							filename = getString(data.array.subarray(index + 46, index + 46 + entry.filenameLength));
 							entry.filename = ((entry.bitFlag & 0x0800) === 0x0800) ? decodeUTF8(filename) : decodeASCII(filename);
 							if (!entry.directory && entry.filename.charAt(entry.filename.length - 1) == "/")
