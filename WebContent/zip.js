@@ -546,19 +546,21 @@
 	}
 
 	function readZip64ExtraField(entry, dataview, offset) {
-	    let zip64ExtraFields = null;
-	    let extraFieldCursorIndex = 0;
+	    var zip64ExtraFields = null;
+        var extraFieldCursorIndex = 0;
         while (extraFieldCursorIndex < entry.extraFieldLength) {
-            let extraFieldFlag = dataview.getUint16(offset + extraFieldCursorIndex, true);
+            var extraFieldFlag = dataview.getUint16(offset + extraFieldCursorIndex, true);
             extraFieldCursorIndex += 2;
-            let extraFieldLength = dataview.getUint16(offset + extraFieldCursorIndex, true);
+            var extraFieldLength = dataview.getUint16(offset + extraFieldCursorIndex, true);
             extraFieldCursorIndex += 2;
             if (extraFieldFlag !== 0x0001) {
                 extraFieldCursorIndex += extraFieldLength;
                 continue;
             }
-            // Suppose there're not last 4 bytes for disk number here
-            zip64ExtraFields = [...Array(extraFieldLength / 8).keys()]
+            // We don't use start disk number here
+            var extraFieldLengthExcludeStartDiskNumber =
+                extraFieldLength % 8 === 0 ? extraFieldLength : extraFieldLength - 4;
+            zip64ExtraFields = [...Array(extraFieldLengthExcludeStartDiskNumber / 8).keys()]
                 .map(i => Number(dataview.getBigUint64(offset + extraFieldCursorIndex + i * 8, true)))
             break;
         }
@@ -790,7 +792,7 @@
 
 		var zipWriter = {
 			add : function(name, reader, onend, onprogress, options) {
-				var header, filename, date;
+				var header, filename, date, file;
 				var worker = this._worker;
 
 				function writeHeader(callback) {
@@ -804,24 +806,27 @@
 						offset : datalength,
 						comment : getBytes(encodeUTF8(options.comment || ""))
 					};
-					header.view.setUint32(0, 0x14000808);
+					file = files[name];
+                    header.view.setUint32(0, 0x14000808);
 					if (options.version)
 						header.view.setUint8(0, options.version);
 					if (!dontDeflate && options.level !== 0 && !options.directory)
 						header.view.setUint16(4, 0x0800);
 					header.view.setUint16(6, (((date.getHours() << 6) | date.getMinutes()) << 5) | date.getSeconds() / 2, true);
 					header.view.setUint16(8, ((((date.getFullYear() - 1980) << 4) | (date.getMonth() + 1)) << 5) | date.getDate(), true);
-					header.view.setUint16(22, filename.length, true);
-					data = getDataHelper(30 + filename.length);
+                    header.view.setUint16(22, filename.length, true);
+                    header.view.setUint16(24, 4, true);
+					data = getDataHelper(30 + filename.length + 4);
 					data.view.setUint32(0, 0x504b0304);
 					data.array.set(header.array, 4);
-					data.array.set(filename, 30);
+                    data.array.set(filename, 30);
+                    data.view.setUint32(30 + filename.length, 1, true)
 					datalength += data.array.length;
 					writer.writeUint8Array(data.array, callback, onwriteerror);
 				}
 
 				function writeFooter(compressedLength, crc32) {
-					var footer = getDataHelper(16);
+					var footer = getDataHelper(24);
 					datalength += compressedLength || 0;
 					footer.view.setUint32(0, 0x504b0708);
 					if (typeof crc32 != "undefined") {
@@ -829,13 +834,33 @@
 						footer.view.setUint32(4, crc32, true);
 					}
 					if (reader) {
-						footer.view.setUint32(8, compressedLength, true);
-						header.view.setUint32(14, compressedLength, true);
-						footer.view.setUint32(12, reader.size, true);
-						header.view.setUint32(18, reader.size, true);
+					    // Handle zip64
+					    if (options.zip64 || compressedLength > 0xffffffff || reader.size > 0xffffffff || file.offset > 0xffffffff) {
+                            files[name].extraFields = [];
+                            if (options.zip64 || reader.size > 0xffffffff) {
+                                files[name].extraFields.push(reader.size);
+                            }
+                            if (options.zip64 || compressedLength > 0xffffffff) {
+                                files[name].extraFields.push(compressedLength);
+                            }
+                            if (options.zip64 || file.offset > 0xffffffff) {
+                                files[name].extraFields.push(file.offset);
+                                file.offset = 0xffffffff;
+                            }
+                        }
+                        if (files[name].extraFields && files[name].extraFields.length) {
+                            header.view.setUint16(24, files[name].extraFields.length * 8 + 4, true);
+                        } else {
+                            header.view.setUint16(24, 0, true);
+                        }
+                        header.view.setUint32(14, (options.zip64 || compressedLength > 0xffffffff) ? 0xffffffff : compressedLength, true);
+                        header.view.setUint32(18, (options.zip64 || reader.size > 0xffffffff) ? 0xffffffff : reader.size, true);
+
+                        footer.view.setBigUint64(8, BigInt(compressedLength), true);
+                        footer.view.setBigUint64(16, BigInt(reader.size), true);
 					}
 					writer.writeUint8Array(footer.array, function() {
-						datalength += 16;
+						datalength += 24;
 						onend();
 					}, onwriteerror);
 				}
@@ -867,18 +892,22 @@
 				else
 					writeFile();
 			},
-			close : function(callback) {
+			close : function(callback, options) {
+                options = options || {};
 				if (this._worker) {
 					this._worker.terminate();
 					this._worker = null;
 				}
 
 				var data, length = 0, index = 0, indexFilename, file;
-				for (indexFilename = 0; indexFilename < filenames.length; indexFilename++) {
+			 	for (indexFilename = 0; indexFilename < filenames.length; indexFilename++) {
 					file = files[filenames[indexFilename]];
 					length += 46 + file.filename.length + file.comment.length;
+					if (file.extraFields) {
+                        length += 4 + file.extraFields.length * 8;
+                    }
 				}
-				data = getDataHelper(length + 22);
+				data = getDataHelper(length);
 				for (indexFilename = 0; indexFilename < filenames.length; indexFilename++) {
 					file = files[filenames[indexFilename]];
 					data.view.setUint32(index, 0x504b0102);
@@ -889,14 +918,43 @@
 						data.view.setUint8(index + 38, 0x10);
 					data.view.setUint32(index + 42, file.offset, true);
 					data.array.set(file.filename, index + 46);
-					data.array.set(file.comment, index + 46 + file.filename.length);
-					index += 46 + file.filename.length + file.comment.length;
+					if (file.extraFields) {
+					    var extraFieldsOffset = index + 46 + file.filename.length;
+                        data.view.setUint16(extraFieldsOffset, 1, true);
+                        data.view.setUint16(extraFieldsOffset + 2, file.extraFields.length * 8, true);
+                        for (var extraFieldIndex = 0 ; extraFieldIndex < file.extraFields.length ; extraFieldIndex++) {
+                            data.view.setBigUint64(extraFieldsOffset + 4 + extraFieldIndex * 8,
+                                BigInt(file.extraFields[extraFieldIndex]), true);
+                        }
+                    }
+                    var extraFieldsLength = !file.extraFields ? 0 : file.extraFields.length * 8 + 4;
+					data.array.set(file.comment, index + 46 + file.filename.length + extraFieldsLength);
+					index += 46 + file.filename.length + extraFieldsLength + file.comment.length;
 				}
-				data.view.setUint32(index, 0x504b0506);
-				data.view.setUint16(index + 8, filenames.length, true);
-				data.view.setUint16(index + 10, filenames.length, true);
-				data.view.setUint32(index + 12, length, true);
-				data.view.setUint32(index + 16, datalength, true);
+                writer.writeUint8Array(data.array, function() {}, onwriteerror);
+
+				var eocdIndex = 0;
+				if(options.zip64 || datalength > 0xffffffff) {
+				    data = getDataHelper(56 + 20 + 22);
+                    data.view.setUint32(0, 0x504b0606);
+                    data.view.setBigUint64(4, BigInt(length), true);
+                    data.view.setUint32(12, 0x3F001400);
+                    data.view.setBigUint64(24, BigInt(filenames.length), true);
+                    data.view.setBigUint64(32, BigInt(filenames.length), true);
+                    data.view.setBigUint64(40, BigInt(filenames.length), true);
+                    data.view.setBigUint64(48, BigInt(datalength), true);
+                    data.view.setUint32(56, 0x504b0607);
+                    data.view.setBigUint64(56 + 8, BigInt(index), true);
+                    data.view.setUint32(56 + 16, 1, true);
+                    eocdIndex = 56 + 20;
+                } else {
+                    data = getDataHelper(22);
+                }
+				data.view.setUint32(eocdIndex, 0x504b0506);
+				data.view.setUint16(eocdIndex + 8, filenames.length, true);
+				data.view.setUint16(eocdIndex + 10, filenames.length, true);
+				data.view.setUint32(eocdIndex + 12, length, true);
+				data.view.setUint32(eocdIndex + 16, (options.zip64 || datalength > 0xffffffff) ? 0xffffffff : datalength, true);
 				writer.writeUint8Array(data.array, function() {
 					writer.getData(callback);
 				}, onwriteerror);

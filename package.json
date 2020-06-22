@@ -1,6 +1,6 @@
 {
   "name": "zip64-js",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "A JavaScript library to zip and unzip files with zip64 support",
   "keywords": [
     "zip unzip delate inflate zip64"
@@ -19,7 +19,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git://github.com/gildas-lormeau/zip.js.git"
+    "url": "git@github.com:peaceps/zip.js.git"
   },
   "dependencies": {},
   "devDependencies": {},
