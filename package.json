@@ -1,6 +1,6 @@
 {
   "name": "zip64-js",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "A JavaScript library to zip and unzip files with zip64 support",
   "keywords": [
     "zip unzip delate inflate zip64"

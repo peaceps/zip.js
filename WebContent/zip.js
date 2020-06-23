@@ -560,8 +560,10 @@
             // We don't use start disk number here
             var extraFieldLengthExcludeStartDiskNumber =
                 extraFieldLength % 8 === 0 ? extraFieldLength : extraFieldLength - 4;
-            zip64ExtraFields = [...Array(extraFieldLengthExcludeStartDiskNumber / 8).keys()]
-                .map(i => Number(dataview.getBigUint64(offset + extraFieldCursorIndex + i * 8, true)))
+			zip64ExtraFields = [];
+			for (var i = 0 ; i < extraFieldLengthExcludeStartDiskNumber / 8 ; i++) {
+				zip64ExtraFields.push(dataview.getBigUint64(offset + extraFieldCursorIndex + i * 8, true));
+			}
             break;
         }
         if (zip64ExtraFields) {
@@ -622,7 +624,7 @@
                         var zip64ExtraData = getDataHelper(zip64ExtraBytes.length, zip64ExtraBytes);
                         readZip64ExtraField(that, zip64ExtraData.view, 0);
                         readDataContent();
-                    })
+                    });
                 } else {
                     readDataContent();
                 }
@@ -820,7 +822,7 @@
 					data.view.setUint32(0, 0x504b0304);
 					data.array.set(header.array, 4);
                     data.array.set(filename, 30);
-                    data.view.setUint32(30 + filename.length, 1, true)
+                    data.view.setUint32(30 + filename.length, 1, true);
 					datalength += data.array.length;
 					writer.writeUint8Array(data.array, callback, onwriteerror);
 				}
@@ -856,8 +858,8 @@
                         header.view.setUint32(14, (options.zip64 || compressedLength > 0xffffffff) ? 0xffffffff : compressedLength, true);
                         header.view.setUint32(18, (options.zip64 || reader.size > 0xffffffff) ? 0xffffffff : reader.size, true);
 
-                        footer.view.setBigUint64(8, BigInt(compressedLength), true);
-                        footer.view.setBigUint64(16, BigInt(reader.size), true);
+						setBigInt(footer.view, 8, compressedLength);
+						setBigInt(footer.view, 16, reader.size);
 					}
 					writer.writeUint8Array(footer.array, function() {
 						datalength += 24;
@@ -923,8 +925,7 @@
                         data.view.setUint16(extraFieldsOffset, 1, true);
                         data.view.setUint16(extraFieldsOffset + 2, file.extraFields.length * 8, true);
                         for (var extraFieldIndex = 0 ; extraFieldIndex < file.extraFields.length ; extraFieldIndex++) {
-                            data.view.setBigUint64(extraFieldsOffset + 4 + extraFieldIndex * 8,
-                                BigInt(file.extraFields[extraFieldIndex]), true);
+							setBigInt(data.view, extraFieldsOffset + 4 + extraFieldIndex * 8, file.extraFields[extraFieldIndex]);
                         }
                     }
                     var extraFieldsLength = !file.extraFields ? 0 : file.extraFields.length * 8 + 4;
@@ -937,14 +938,14 @@
 				if(options.zip64 || datalength > 0xffffffff) {
 				    data = getDataHelper(56 + 20 + 22);
                     data.view.setUint32(0, 0x504b0606);
-                    data.view.setBigUint64(4, BigInt(length), true);
+					setBigInt(data.view, 4, length);
                     data.view.setUint32(12, 0x3F001400);
-                    data.view.setBigUint64(24, BigInt(filenames.length), true);
-                    data.view.setBigUint64(32, BigInt(filenames.length), true);
-                    data.view.setBigUint64(40, BigInt(filenames.length), true);
-                    data.view.setBigUint64(48, BigInt(datalength), true);
+					setBigInt(data.view, 24, filenames.length);
+					setBigInt(data.view, 32, filenames.length);
+					setBigInt(data.view, 40, filenames.length);
+					setBigInt(data.view, 48, datalength);
                     data.view.setUint32(56, 0x504b0607);
-                    data.view.setBigUint64(56 + 8, BigInt(index), true);
+					setBigInt(data.view, 56 + 8, index);
                     data.view.setUint32(56 + 16, 1, true);
                     eocdIndex = 56 + 20;
                 } else {
@@ -1030,6 +1031,12 @@
 			worker.terminate();
 			onerror(err);
 		}
+	}
+
+	function setBigInt(view, offset, number) {
+		// view.setBigUint64(offset, BigInt(number), true);
+		view.setUint32(offset, number % 0x100000000, true);
+		view.setUint32(offset + 4, number / 0x100000000, true);
 	}
 
 	function onerror_default(error) {
