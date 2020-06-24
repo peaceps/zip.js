@@ -562,7 +562,7 @@
                 extraFieldLength % 8 === 0 ? extraFieldLength : extraFieldLength - 4;
 			zip64ExtraFields = [];
 			for (var i = 0 ; i < extraFieldLengthExcludeStartDiskNumber / 8 ; i++) {
-				zip64ExtraFields.push(dataview.getBigUint64(offset + extraFieldCursorIndex + i * 8, true));
+				zip64ExtraFields.push(getBigInt(dataview, offset + extraFieldCursorIndex + i * 8));
 			}
             break;
         }
@@ -681,8 +681,8 @@
                                     seekedEntryStartOffset = eocdrDataView.getUint32(16, true);
                                     seekedEntriesCount = eocdrDataView.getUint16(8, true);
                                 } else if (eocdrDataView.getUint32(0, true) === 0x06064b50) {
-                                    seekedEntryStartOffset = Number(eocdrDataView.getBigUint64(48, true));
-                                    seekedEntriesCount = eocdrDataView.getBigUint64(24, true);
+                                    seekedEntryStartOffset = getBigInt(eocdrDataView, 48);
+                                    seekedEntriesCount = getBigInt(eocdrDataView, 24);
                                 } else {
                                     eocdrNotFoundCallback();
                                     return;
@@ -1037,6 +1037,11 @@
 		// view.setBigUint64(offset, BigInt(number), true);
 		view.setUint32(offset, number % 0x100000000, true);
 		view.setUint32(offset + 4, number / 0x100000000, true);
+	}
+
+	function getBigInt(view, offset) {
+		// return Number(view.getBigUint64(offset, true));
+		return view.getUint32(offset, true) + view.getUint32(offset + 4, true) * 0x100000000;
 	}
 
 	function onerror_default(error) {
