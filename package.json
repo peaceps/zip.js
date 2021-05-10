@@ -1,9 +1,9 @@
 {
   "name": "zip64-js",
-  "version": "0.0.4",
-  "description": "A JavaScript library to zip and unzip files with zip64 support",
+  "version": "0.0.5",
+  "description": "Now zip-js already supports zip64 format!! Please use offical zip-js!!",
   "keywords": [
-    "zip unzip delate inflate zip64"
+    "Now zip-js already supports zip64 format!! Please use offical zip-js!!"
   ],
   "author": "Gildas Lormeau <gildas.lormeau@gmail.com> (https://github.com/gildas-lormeau/)",
   "licenses": [
